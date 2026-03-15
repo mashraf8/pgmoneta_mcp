@@ -15,6 +15,7 @@
 
 mod info;
 mod retention;
+mod shutdown;
 
 use super::compression::CompressionUtil;
 use super::configuration::CONFIG;
