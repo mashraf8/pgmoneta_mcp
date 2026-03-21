@@ -187,7 +187,10 @@ impl ServerHandler for PgmonetaHandler {
     /// Provides the MCP initialization capabilities and metadata for this server.
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info(Implementation::new(
+                "pgmoneta-mcp",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions("This server provides capabilities to interact with pgmoneta, a backup/restore tool for PostgreSQL.")
     }
 
