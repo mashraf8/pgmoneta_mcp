@@ -22,8 +22,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
 use rmcp::{RoleClient, ServiceExt};
 use tokio::time::timeout;
 
-/// A shared MCP client that encapsulates the connection and tool execution logic.
-/// This can be used by both the REPL and future LLM clients.
+/// The main client interface for communicating with the pgmoneta MCP server.
 pub struct McpClient {
     session: RunningService<RoleClient, ()>,
     timeout: Duration,
