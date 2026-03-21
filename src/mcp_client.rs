@@ -13,13 +13,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
-use std::time::Duration;
 use rmcp::model::Tool;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
 use rmcp::{RoleClient, ServiceExt};
+use std::collections::HashMap;
+use std::time::Duration;
 use tokio::time::timeout;
 
 /// The main client interface for communicating with the pgmoneta MCP server.

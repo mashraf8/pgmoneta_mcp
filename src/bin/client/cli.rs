@@ -13,11 +13,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::engine::ClientEngine;
+use crate::{ClientCommands, McpCli, OutputFormat, ToolCommands};
 use anyhow::{Result, bail};
 use serde::Serialize;
 use treelog::{Tree, config::RenderConfig, renderer::write_tree_with_config};
-use crate::engine::ClientEngine;
-use crate::{ClientCommands, McpCli, OutputFormat, ToolCommands};
 
 pub async fn execute_cli_router(cmd: McpCli) -> Result<()> {
     match cmd {

@@ -13,12 +13,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
-use anyhow::{Result, anyhow, bail};
-use rmcp::model::{CallToolResult, Tool};
 use crate::CallArgs;
+use anyhow::{Result, anyhow, bail};
 use pgmoneta_mcp::mcp_client::McpClient;
 use pgmoneta_mcp::utils::SafeFileReader;
+use rmcp::model::{CallToolResult, Tool};
+use std::collections::HashMap;
 
 pub struct ClientEngine {
     client: McpClient,

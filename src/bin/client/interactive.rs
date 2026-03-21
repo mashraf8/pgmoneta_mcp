@@ -13,13 +13,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
-use anyhow::{Result, anyhow, bail};
-use inquire::{Select, Text};
 use crate::cli::{CliExecute, ClientCli};
 use crate::engine::ClientEngine;
 use crate::{CallArgs, ClientCommands, OutputFormat, PrintArgs, ToolCommands};
+use anyhow::{Result, anyhow, bail};
+use inquire::{Select, Text};
 use pgmoneta_mcp::utils::SafeFileReader;
+use std::collections::HashMap;
 
 /// Gracefully handles Inquire cancellations such as Esc or Ctrl+C
 macro_rules! prompt_or_cancel {
@@ -35,7 +35,10 @@ macro_rules! prompt_or_cancel {
 
 pub async fn run_interactive_router() -> Result<()> {
     let client_version = env!("CARGO_PKG_VERSION");
-    println!("Welcome to pgmoneta MCP Interactive Shell! v{}", client_version);
+    println!(
+        "Welcome to pgmoneta MCP Interactive Shell! v{}",
+        client_version
+    );
 
     let options = vec!["Client", "Exit"];
     let choice = Select::new("Select a module:", options).prompt();
@@ -95,7 +98,7 @@ impl InteractiveWizard for ClientWizard {
         if let Some((server_name, server_version)) = client.server_info() {
             println!("  Server: {} v{}", server_name, server_version);
         }
-        
+
         let options = vec!["Tools", "Exit"];
         loop {
             let choice = Select::new("What would you like to manage?", options.clone()).prompt();
