@@ -42,6 +42,10 @@ impl ClientEngine {
         Ok(tools)
     }
 
+    pub fn server_info(&self) -> Option<(&str, &str)> {
+        self.client.server_info()
+    }
+
     pub async fn execute_call_tool(&self, call_args: CallArgs) -> Result<CallToolResult> {
         let parsed_args = Self::parse_call_args(&call_args)?;
         let result = self.client.call_tool(call_args.name, parsed_args).await?;

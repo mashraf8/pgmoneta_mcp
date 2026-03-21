@@ -36,7 +36,8 @@ macro_rules! prompt_or_cancel {
 }
 
 pub async fn run_interactive_router() -> Result<()> {
-    println!("Welcome to pgmoneta MCP Interactive Shell!");
+    let client_version = env!("CARGO_PKG_VERSION");
+    println!("Welcome to pgmoneta MCP Interactive Shell! v{}", client_version);
 
     let options = vec!["Client", "Exit"];
     let choice = Select::new("Select a module:", options).prompt();
@@ -92,6 +93,11 @@ impl InteractiveWizard for ClientWizard {
 
         let client = ClientEngine::connect(&url, timeout_secs).await?;
 
+        println!("  Connected to: {}", url);
+        if let Some((server_name, server_version)) = client.server_info() {
+            println!("  Server: {} v{}", server_name, server_version);
+        }
+        
         let options = vec!["Tools", "Exit"];
         loop {
             let choice = Select::new("What would you like to manage?", options.clone()).prompt();

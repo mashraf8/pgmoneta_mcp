@@ -67,6 +67,16 @@ impl McpClient {
         Ok(result)
     }
 
+    /// Returns the server's name and version
+    pub fn server_info(&self) -> Option<(&str, &str)> {
+        self.session.peer_info().map(|info| {
+            (
+                info.server_info.name.as_str(),
+                info.server_info.version.as_str(),
+            )
+        })
+    }
+
     /// Cleanly closes the MCP session
     pub async fn cleanup(self) -> anyhow::Result<()> {
         self.session.cancel().await?;
