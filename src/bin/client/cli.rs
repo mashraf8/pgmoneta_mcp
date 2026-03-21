@@ -16,7 +16,6 @@
 use anyhow::{Result, bail};
 use serde::Serialize;
 use treelog::{Tree, config::RenderConfig, renderer::write_tree_with_config};
-
 use crate::engine::ClientEngine;
 use crate::{ClientCommands, McpCli, OutputFormat, ToolCommands};
 

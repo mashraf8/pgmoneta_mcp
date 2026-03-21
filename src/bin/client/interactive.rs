@@ -14,10 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use std::collections::HashMap;
-
 use anyhow::{Result, anyhow, bail};
 use inquire::{Select, Text};
-
 use crate::cli::{CliExecute, ClientCli};
 use crate::engine::ClientEngine;
 use crate::{CallArgs, ClientCommands, OutputFormat, PrintArgs, ToolCommands};

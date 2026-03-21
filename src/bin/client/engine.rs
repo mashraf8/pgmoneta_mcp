@@ -14,10 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use std::collections::HashMap;
-
 use anyhow::{Result, anyhow, bail};
 use rmcp::model::{CallToolResult, Tool};
-
 use crate::CallArgs;
 use pgmoneta_mcp::mcp_client::McpClient;
 use pgmoneta_mcp::utils::SafeFileReader;

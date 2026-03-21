@@ -15,7 +15,6 @@
 
 use std::collections::HashMap;
 use std::time::Duration;
-
 use rmcp::model::Tool;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
