@@ -19,6 +19,13 @@ use std::path::{Path, PathBuf};
 /// Provides general-purpose helper functions for the application.
 pub struct Utility;
 
+/// A configurable safe file reader with security validations.
+pub struct SafeFileReader {
+    max_size: Option<u64>,
+    allowed_extensions: Option<Vec<String>>,
+    allowed_base_dir: Option<PathBuf>,
+}
+
 impl Utility {
     /// Formats a raw byte count into a human-readable file size string.
     ///
@@ -48,19 +55,6 @@ impl Utility {
         } else {
             format!("{:.2} TB", size as f64 / TB as f64)
         }
-    }
-}
-
-/// A configurable safe file reader with security validations.
-pub struct SafeFileReader {
-    max_size: Option<u64>,
-    allowed_extensions: Option<Vec<String>>,
-    allowed_base_dir: Option<PathBuf>,
-}
-
-impl Default for SafeFileReader {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -148,6 +142,12 @@ impl SafeFileReader {
 
         std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("Failed to read '{}': {}", path.display(), e))
+    }
+}
+
+impl Default for SafeFileReader {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
