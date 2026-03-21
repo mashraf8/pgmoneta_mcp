@@ -49,7 +49,10 @@ pgmoneta-mcp-client
 #### 2. Calling a Tool
 
 ```bash
-./pgmoneta-mcp-client client --url <your_mcp_server_url> tool call <tool_name> '{"key": "value"}'
+./pgmoneta-mcp-client client --url <your_mcp_server_url> tool call <tool_name_with_args> '{"key": "value"}'
+```
+```bash
+./pgmoneta-mcp-client client --url <your_mcp_server_url> tool call <tool_name_without_args>
 ```
 
 > **Note 1:** The `-f` flag allows you to load data from any file. This is functionally identical to typing directly in the terminal.Max file size supported: **10 MB**
