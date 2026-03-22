@@ -63,8 +63,8 @@ pub struct PgmonetaConfiguration {
     #[serde(default = "default_compression")]
     pub compression: String,
     /// Encryption algorithm for MCP <-> pgmoneta communication.
-    /// Supported: "none", "aes_256_cbc", "aes_192_cbc", "aes_128_cbc".
-    /// Default: "aes_256_cbc".
+    /// Supported: "none", "aes_256_gcm", "aes_192_gcm", "aes_128_gcm".
+    /// Default: "aes_256_gcm".
     #[serde(default = "default_encryption")]
     pub encryption: String,
 }
@@ -248,5 +248,5 @@ fn default_compression() -> String {
 }
 
 fn default_encryption() -> String {
-    "aes_256_cbc".to_string()
+    "aes_256_gcm".to_string()
 }

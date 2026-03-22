@@ -36,12 +36,18 @@ fn parse_compression(compression: &str) -> u8 {
     }
 }
 
-fn parse_encryption(encryption: &str) -> u8 {
+fn parse_encryption(encryption: &str) -> anyhow::Result<u8> {
     match encryption.to_lowercase().as_str() {
-        "aes_256_cbc" => Encryption::AES_256_CBC,
-        "aes_192_cbc" => Encryption::AES_192_CBC,
-        "aes_128_cbc" => Encryption::AES_128_CBC,
-        _ => Encryption::NONE,
+        "aes_256_gcm" | "aes" | "aes_256" => Ok(Encryption::AES_256_GCM),
+        "aes_192_gcm" | "aes_192" => Ok(Encryption::AES_192_GCM),
+        "aes_128_gcm" | "aes_128" => Ok(Encryption::AES_128_GCM),
+        // Explicitly allowed disabled encryption
+        "none" | "" | "off" => Ok(Encryption::NONE),
+        // Unrecognized values fail fast to prevent silent security regressions
+        unknown => Err(anyhow!(
+            "Unrecognized encryption mode: {}. Supported modes: none, aes_256_gcm, aes_192_gcm, aes_128_gcm.",
+            unknown
+        )),
     }
 }
 
@@ -89,17 +95,17 @@ impl PgmonetaClient {
     ///
     /// The header includes the current local timestamp and defaults to
     /// no encryption or compression, expecting a JSON response.
-    fn build_request_header(command: u32) -> RequestHeader {
+    fn build_request_header(command: u32) -> anyhow::Result<RequestHeader> {
         let config = CONFIG.get().expect("Configuration should be enabled");
         let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
-        RequestHeader {
+        Ok(RequestHeader {
             command,
             client_version: CLIENT_VERSION.to_string(),
             output_format: Format::JSON,
             timestamp,
             compression: parse_compression(&config.pgmoneta.compression),
-            encryption: parse_encryption(&config.pgmoneta.encryption),
-        }
+            encryption: parse_encryption(&config.pgmoneta.encryption)?,
+        })
     }
 
     /// Establishes an authenticated TCP connection to the pgmoneta server.
@@ -156,7 +162,7 @@ impl PgmonetaClient {
             }
 
             if encryption != Encryption::NONE {
-                data = security_util.encrypt_text_aes_cbc(&data, encryption)?;
+                data = security_util.encrypt_text_aes_gcm_bundle(&data, encryption)?;
             }
 
             security_util.base64_encode(&data)?
@@ -190,7 +196,7 @@ impl PgmonetaClient {
             let data = security_util.base64_decode(std::str::from_utf8(&buf)?)?;
 
             let decrypted = if encryption != Encryption::NONE {
-                security_util.decrypt_text_aes_cbc(&data, encryption)?
+                security_util.decrypt_text_aes_gcm_bundle(&data, encryption)?
             } else {
                 data
             };
@@ -223,7 +229,7 @@ impl PgmonetaClient {
         let mut stream = Self::connect_to_server(username).await?;
         tracing::info!(username = username, "Connected to server");
 
-        let header = Self::build_request_header(command);
+        let header = Self::build_request_header(command)?;
         let compression = header.compression;
         let encryption = header.encryption;
         let request = PgmonetaRequest { request, header };
@@ -260,7 +266,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     port: 5001,
                     compression: "zstd".to_string(),
-                    encryption: "aes_256_cbc".to_string(),
+                    encryption: "aes_256_gcm".to_string(),
                 },
                 admins: HashMap::new(),
                 llm: None,
@@ -272,13 +278,14 @@ mod tests {
     #[test]
     fn test_build_request_header() {
         init_test_config();
-        let header = PgmonetaClient::build_request_header(Command::INFO);
+        let header = PgmonetaClient::build_request_header(Command::INFO)
+            .expect("Header building should succeed");
 
         assert_eq!(header.command, Command::INFO);
         assert_eq!(header.client_version, CLIENT_VERSION);
         assert_eq!(header.output_format, Format::JSON);
         assert_eq!(header.compression, Compression::ZSTD);
-        assert_eq!(header.encryption, Encryption::AES_256_CBC);
+        assert_eq!(header.encryption, Encryption::AES_256_GCM);
 
         // Timestamp should be in YYYYMMDDHHmmss format (14 characters)
         assert_eq!(header.timestamp.len(), 14);
@@ -288,8 +295,8 @@ mod tests {
     #[test]
     fn test_build_request_header_different_commands() {
         init_test_config();
-        let header1 = PgmonetaClient::build_request_header(Command::INFO);
-        let header2 = PgmonetaClient::build_request_header(Command::LIST_BACKUP);
+        let header1 = PgmonetaClient::build_request_header(Command::INFO).unwrap();
+        let header2 = PgmonetaClient::build_request_header(Command::LIST_BACKUP).unwrap();
 
         assert_eq!(header1.command, Command::INFO);
         assert_eq!(header2.command, Command::LIST_BACKUP);
@@ -310,7 +317,7 @@ mod tests {
             field2: 42,
         };
 
-        let header = PgmonetaClient::build_request_header(Command::INFO);
+        let header = PgmonetaClient::build_request_header(Command::INFO).unwrap();
         let request = PgmonetaRequest {
             header,
             request: test_request,
@@ -383,7 +390,7 @@ mod tests {
     #[test]
     fn test_timestamp_format() {
         init_test_config();
-        let header = PgmonetaClient::build_request_header(Command::INFO);
+        let header = PgmonetaClient::build_request_header(Command::INFO).unwrap();
         let timestamp = &header.timestamp;
 
         // Should be exactly 14 digits
@@ -418,7 +425,7 @@ mod tests {
             data: "test".to_string(),
         };
 
-        let header = PgmonetaClient::build_request_header(Command::INFO);
+        let header = PgmonetaClient::build_request_header(Command::INFO).unwrap();
         let request1 = PgmonetaRequest {
             header: header.clone(),
             request: test_request.clone(),
@@ -429,5 +436,46 @@ mod tests {
         let serialized2 = serde_json::to_string(&request2).unwrap();
 
         assert_eq!(serialized1, serialized2);
+    }
+
+    #[test]
+    fn parse_encryption_gcm_and_aliases() {
+        assert_eq!(
+            Encryption::AES_256_GCM,
+            parse_encryption("aes_256_gcm").unwrap()
+        );
+        assert_eq!(Encryption::AES_256_GCM, parse_encryption("aes").unwrap());
+        assert_eq!(
+            Encryption::AES_256_GCM,
+            parse_encryption("AES_256").unwrap()
+        );
+        assert_eq!(
+            Encryption::AES_192_GCM,
+            parse_encryption("aes_192_gcm").unwrap()
+        );
+        assert_eq!(
+            Encryption::AES_192_GCM,
+            parse_encryption("aes_192").unwrap()
+        );
+        assert_eq!(
+            Encryption::AES_128_GCM,
+            parse_encryption("aes_128_gcm").unwrap()
+        );
+        assert_eq!(
+            Encryption::AES_128_GCM,
+            parse_encryption("aes_128").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_encryption_none_variants() {
+        assert_eq!(Encryption::NONE, parse_encryption("none").unwrap());
+        assert_eq!(Encryption::NONE, parse_encryption("off").unwrap());
+        assert_eq!(Encryption::NONE, parse_encryption("").unwrap());
+    }
+
+    #[test]
+    fn parse_encryption_unknown_fails() {
+        assert!(parse_encryption("some_weird_mode").is_err());
     }
 }

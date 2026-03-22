@@ -194,18 +194,12 @@ impl Compression {
 impl Encryption {
     /// No encryption.
     pub const NONE: u8 = 0;
-    /// AES-256 with Cipher Block Chaining.
-    pub const AES_256_CBC: u8 = 1;
-    /// AES-192 with Cipher Block Chaining.
-    pub const AES_192_CBC: u8 = 2;
-    /// AES-128 with Cipher Block Chaining.
-    pub const AES_128_CBC: u8 = 3;
-    /// AES-256 with Counter Mode.
-    pub const AES_256_CTR: u8 = 4;
-    /// AES-192 with Counter Mode.
-    pub const AES_192_CTR: u8 = 5;
-    /// AES-128 with Counter Mode.
-    pub const AES_128_CTR: u8 = 6;
+    /// AES-256 with Galois/Counter Mode.
+    pub const AES_256_GCM: u8 = 1;
+    /// AES-192 with Galois/Counter Mode.
+    pub const AES_192_GCM: u8 = 2;
+    /// AES-128 with Galois/Counter Mode.
+    pub const AES_128_GCM: u8 = 3;
 
     /// Translates a numeric encryption code into its string representation.
     ///
@@ -217,12 +211,9 @@ impl Encryption {
     pub fn translate_encryption_enum(encryption: u8) -> anyhow::Result<&'static str> {
         match encryption {
             Encryption::NONE => Ok("none"),
-            Encryption::AES_256_CBC => Ok("aes_256_cbc"),
-            Encryption::AES_192_CBC => Ok("aes_192_cbc"),
-            Encryption::AES_128_CBC => Ok("aes_128_cbc"),
-            Encryption::AES_256_CTR => Ok("aes_256_ctr"),
-            Encryption::AES_192_CTR => Ok("aes_192_ctr"),
-            Encryption::AES_128_CTR => Ok("aes_128_ctr"),
+            Encryption::AES_256_GCM => Ok("aes_256_gcm"),
+            Encryption::AES_192_GCM => Ok("aes_192_gcm"),
+            Encryption::AES_128_GCM => Ok("aes_128_gcm"),
             default => Err(anyhow!("Unrecognized encryption enum: {default}")),
         }
     }

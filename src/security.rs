@@ -14,18 +14,18 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::constant::{Encryption, MASTER_KEY_PATH};
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes_gcm::aead::consts::U12;
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
 use anyhow::anyhow;
+type Aes192Gcm = AesGcm<aes::Aes192, U12>;
 use base64::{
     Engine as _, alphabet,
     engine::{self, general_purpose},
 };
-use cbc;
 use hmac::Hmac;
 use home::home_dir;
-use pbkdf2::{pbkdf2, pbkdf2_hmac};
+use pbkdf2::pbkdf2;
 use rand::TryRngCore;
 use scram::ScramClient;
 use sha2::Sha256;
@@ -39,6 +39,8 @@ const SALT_LEN: usize = 16;
 const PBKDF2_ITERATIONS: u32 = 600_000;
 const MAX_CIPHERTEXT_B64_LEN: usize = 1024 * 1024;
 
+use std::path::PathBuf;
+
 /// Handles cryptographic operations and secure communication.
 ///
 /// This utility manages Base64 encoding/decoding, AES-256-GCM encryption/decryption
@@ -46,13 +48,27 @@ const MAX_CIPHERTEXT_B64_LEN: usize = 1024 * 1024;
 /// authentication over the PostgreSQL wire protocol.
 pub struct SecurityUtil {
     base64_engine: engine::GeneralPurpose,
+    master_key_path: Option<PathBuf>,
 }
 
 impl SecurityUtil {
-    /// Creates a new `SecurityUtil` with a standard Base64 engine.
+    /// Creates a new `SecurityUtil` with a standard Base64 engine and default master key path.
+    ///
+    /// This constructor is infallible; it will target the user's home directory if resolvable,
+    /// otherwise it will defer the error to when a master key operation is actually attempted.
     pub fn new() -> Self {
+        let master_key_path = home_dir().map(|h| h.join(MASTER_KEY_PATH));
         Self {
             base64_engine: engine::GeneralPurpose::new(&alphabet::STANDARD, general_purpose::PAD),
+            master_key_path,
+        }
+    }
+
+    /// Creates a new `SecurityUtil` with a custom master key path.
+    pub fn new_with_path(path: PathBuf) -> Self {
+        Self {
+            base64_engine: engine::GeneralPurpose::new(&alphabet::STANDARD, general_purpose::PAD),
+            master_key_path: Some(path),
         }
     }
 
@@ -72,15 +88,17 @@ impl SecurityUtil {
     /// The returned key is wrapped in a `Zeroizing` container to ensure it is wiped
     /// from memory when dropped.
     pub fn load_master_key(&self) -> anyhow::Result<Zeroizing<Vec<u8>>> {
-        let home_path = home_dir().ok_or_else(|| anyhow!("Unable to find home path"))?;
-        let key_path = home_path.join(MASTER_KEY_PATH);
+        let key_path = self
+            .master_key_path
+            .as_ref()
+            .ok_or_else(|| anyhow!("Unable to find home path. Set HOME environment variable or use a custom master key path."))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&key_path)?.permissions().mode() & 0o777;
+            let mode = fs::metadata(key_path)?.permissions().mode() & 0o777;
             if (mode & 0o077) != 0 {
-                fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
+                fs::set_permissions(key_path, fs::Permissions::from_mode(0o600))?;
             }
         }
 
@@ -92,8 +110,10 @@ impl SecurityUtil {
     ///
     /// On Unix systems, this ensures the file is created with secure `0600` permissions.
     pub fn write_master_key(&self, key: &str) -> anyhow::Result<()> {
-        let home_path = home_dir().ok_or_else(|| anyhow!("Unable to find home path"))?;
-        let key_path = home_path.join(MASTER_KEY_PATH);
+        let key_path = self
+            .master_key_path
+            .as_ref()
+            .ok_or_else(|| anyhow!("Unable to find home path. Set HOME environment variable or use a custom master key path."))?;
         let key_encoded = self.base64_encode(key.as_bytes())?;
         if let Some(parent) = key_path.parent() {
             fs::create_dir_all(parent)?;
@@ -109,9 +129,9 @@ impl SecurityUtil {
                 .create(true)
                 .truncate(true)
                 .mode(0o600)
-                .open(&key_path)?;
+                .open(key_path)?;
             file.write_all(key_encoded.as_bytes())?;
-            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
+            fs::set_permissions(key_path, fs::Permissions::from_mode(0o600))?;
             Ok(())
         }
 
@@ -128,11 +148,12 @@ impl SecurityUtil {
         plain_text: &[u8],
         master_key: &[u8],
     ) -> anyhow::Result<String> {
-        let (cipher_text, nonce_bytes, salt) = Self::encrypt_text_aes_gcm(plain_text, master_key)?;
+        let (cipher_text, nonce_bytes, salt) =
+            Self::encrypt_text_aes_gcm(plain_text, master_key, Encryption::AES_256_GCM)?;
         let mut bytes = Vec::new();
-        // nonce + salt + cipher text
-        bytes.extend_from_slice(&nonce_bytes);
+        // salt + nonce (IV) + cipher text (includes GCM tag)
         bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&nonce_bytes);
         bytes.extend(cipher_text.iter());
         self.base64_encode(bytes.as_slice())
     }
@@ -150,13 +171,14 @@ impl SecurityUtil {
         if cipher_text_bytes.len() < SALT_LEN + NONCE_LEN {
             return Err(anyhow!("Not enough bytes to decrypt the text"));
         }
-        let nonce: &[u8] = &cipher_text_bytes[..NONCE_LEN];
-        let salt: &[u8] = &cipher_text_bytes[NONCE_LEN..NONCE_LEN + SALT_LEN];
+        let salt: &[u8] = &cipher_text_bytes[..SALT_LEN];
+        let nonce: &[u8] = &cipher_text_bytes[SALT_LEN..SALT_LEN + NONCE_LEN];
         Self::decrypt_text_aes_gcm(
-            &cipher_text_bytes[(NONCE_LEN + SALT_LEN)..],
+            &cipher_text_bytes[(SALT_LEN + NONCE_LEN)..],
             master_key,
             nonce,
             salt,
+            Encryption::AES_256_GCM,
         )
     }
 
@@ -224,64 +246,128 @@ impl SecurityUtil {
         Ok(msg)
     }
 
-    /// Derives a 32-byte encryption key from the master key and salt using the `scrypt` KDF.
-    fn derive_key(master_key: &[u8], salt: &[u8]) -> anyhow::Result<[u8; 32]> {
-        let mut derived_key = [0u8; 32];
+    /// Derives an encryption key from the master key and salt using PBKDF2-HMAC-SHA256.
+    ///
+    /// The length of the derived key is determined by the `key_len` parameter (16, 24, or 32 bytes).
+    fn derive_key(master_key: &[u8], salt: &[u8], key_len: usize) -> anyhow::Result<Vec<u8>> {
+        let mut derived_key = vec![0u8; key_len];
         pbkdf2::<Hmac<Sha256>>(master_key, salt, PBKDF2_ITERATIONS, &mut derived_key)
             .map_err(|e| anyhow!("PBKDF2 failed: {:?}", e))?;
         Ok(derived_key)
     }
 
-    /// Encrypts raw bytes using AES-256-GCM.
+    /// Encrypts raw bytes using AES-GCM (128, 192, or 256-bit).
     ///
     /// AES-GCM (Galois/Counter Mode) is the recommended encryption method for native
     /// pgmoneta-mcp use cases. It provides both confidentiality and authentication,
     /// is more efficient, and is resistant to certain attacks that affect CBC mode.
     ///
     /// Automatically generates a secure random nonce and salt, derives the encryption key
-    /// using PBKDF2, and returns the ciphertext alongside the generated nonce and salt.
+    /// using PBKDF2 with 600,000 iterations, and returns the ciphertext alongside the
+    /// generated nonce and salt. The bit-length is selected via `encryption_mode`.
     pub fn encrypt_text_aes_gcm(
         plaintext: &[u8],
         master_key: &[u8],
+        encryption_mode: u8,
     ) -> anyhow::Result<(Vec<u8>, [u8; NONCE_LEN], [u8; SALT_LEN])> {
+        let key_len = match encryption_mode {
+            Encryption::AES_128_GCM => 16,
+            Encryption::AES_192_GCM => 24,
+            Encryption::AES_256_GCM => 32,
+            _ => {
+                return Err(anyhow!(
+                    "Unsupported or invalid encryption mode: {}",
+                    encryption_mode
+                ));
+            }
+        };
         // derive the key
         let mut salt = [0u8; SALT_LEN];
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rand::rngs::OsRng.try_fill_bytes(&mut salt)?;
         rand::rngs::OsRng.try_fill_bytes(&mut nonce_bytes)?;
-        let mut derived_key_bytes = Self::derive_key(master_key, &salt)?;
-        let derived_key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_key_bytes);
-
-        let cipher = Aes256Gcm::new(derived_key);
+        let mut derived_key_bytes = Self::derive_key(master_key, &salt, key_len)?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = cipher
-            .encrypt(nonce, plaintext)
-            .map_err(|e| anyhow!("AES encryption failed {:?}", e));
+
+        let ciphertext = match encryption_mode {
+            Encryption::AES_128_GCM => {
+                let cipher = Aes128Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .encrypt(nonce, plaintext)
+                    .map_err(|e| anyhow!("AES encryption failed {:?}", e))
+            }
+            Encryption::AES_192_GCM => {
+                let cipher = Aes192Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .encrypt(nonce, plaintext)
+                    .map_err(|e| anyhow!("AES encryption failed {:?}", e))
+            }
+            _ => {
+                let cipher = Aes256Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .encrypt(nonce, plaintext)
+                    .map_err(|e| anyhow!("AES encryption failed {:?}", e))
+            }
+        };
 
         derived_key_bytes.zeroize();
 
         Ok((ciphertext?, nonce_bytes, salt))
     }
 
-    /// Decrypts AES-256-GCM ciphertext using the provided master key, nonce, and salt.
+    /// Decrypts AES-GCM ciphertext (128, 192, or 256-bit) using the provided master key,
+    /// nonce, and salt.
     ///
     /// This function decrypts data that was encrypted with `encrypt_text_aes_gcm`.
     /// AES-GCM provides authenticated encryption, ensuring both confidentiality
-    /// and integrity of the data.
+    /// and integrity of the data. The bit-length is selected via `encryption_mode`.
     pub fn decrypt_text_aes_gcm(
         ciphertext: &[u8],
         master_key: &[u8],
         nonce_bytes: &[u8],
         salt: &[u8],
+        encryption_mode: u8,
     ) -> anyhow::Result<Vec<u8>> {
-        let mut derived_key_bytes = Self::derive_key(master_key, salt)?;
-        let derived_key = aes_gcm::Key::<Aes256Gcm>::from_slice(&derived_key_bytes);
-        let cipher = Aes256Gcm::new(derived_key);
-
+        let key_len = match encryption_mode {
+            Encryption::AES_128_GCM => 16,
+            Encryption::AES_192_GCM => 24,
+            Encryption::AES_256_GCM => 32,
+            _ => {
+                return Err(anyhow!(
+                    "Unsupported or invalid encryption mode: {}",
+                    encryption_mode
+                ));
+            }
+        };
+        let mut derived_key_bytes = Self::derive_key(master_key, salt, key_len)?;
         let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| anyhow!("AES decryption failed {:?}", e));
+
+        let plaintext = match encryption_mode {
+            Encryption::AES_128_GCM => {
+                let cipher = Aes128Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .decrypt(nonce, ciphertext)
+                    .map_err(|e| anyhow!("AES decryption failed {:?}", e))
+            }
+            Encryption::AES_192_GCM => {
+                let cipher = Aes192Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .decrypt(nonce, ciphertext)
+                    .map_err(|e| anyhow!("AES decryption failed {:?}", e))
+            }
+            _ => {
+                let cipher = Aes256Gcm::new_from_slice(&derived_key_bytes)
+                    .map_err(|e| anyhow!("Key initialization failed: {:?}", e))?;
+                cipher
+                    .decrypt(nonce, ciphertext)
+                    .map_err(|e| anyhow!("AES decryption failed {:?}", e))
+            }
+        };
         derived_key_bytes.zeroize();
 
         plaintext
@@ -458,134 +544,55 @@ impl Default for SecurityUtil {
 }
 
 impl SecurityUtil {
-    fn encrypt_text_aes_cbc_with_master_key(
+    /// Encrypts a byte slice into an AES-GCM bundle.
+    ///
+    /// The resulting bundle follows the format:
+    /// `[Salt (16 bytes)][IV/Nonce (12 bytes)][Ciphertext (variable)][Tag (16 bytes)]`
+    ///
+    /// Note: `aes-gcm` tags are appended to the ciphertext automatically.
+    pub fn encrypt_text_aes_gcm_bundle(
+        &self,
         plaintext: &[u8],
         encryption_mode: u8,
-        master_key: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
-        type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-        type Aes192CbcEnc = cbc::Encryptor<aes::Aes192>;
-        type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
-
-        let key_len = match encryption_mode {
-            Encryption::AES_256_CBC => 32,
-            Encryption::AES_192_CBC => 24,
-            Encryption::AES_128_CBC => 16,
-            _ => return Err(anyhow!("Invalid encryption mode: {}", encryption_mode)),
-        };
-
-        let mut salt = [0u8; SALT_LEN];
-        rand::rngs::OsRng.try_fill_bytes(&mut salt)?;
-
-        let mut derived = vec![0u8; key_len + 16];
-        pbkdf2_hmac::<Sha256>(master_key, &salt, PBKDF2_ITERATIONS, &mut derived);
-
-        let key = &derived[..key_len];
-        let iv = &derived[key_len..];
-
-        let mut buffer = plaintext.to_vec();
-        // Reserve space for PKCS7 padding (up to one block size)
-        let pad_len = 16 - (plaintext.len() % 16);
-        buffer.extend(vec![0u8; pad_len]);
-
-        match key_len {
-            32 => Aes256CbcEnc::new(key.into(), iv.into())
-                .encrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(
-                    &mut buffer,
-                    plaintext.len(),
-                ),
-            24 => Aes192CbcEnc::new(key.into(), iv.into())
-                .encrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(
-                    &mut buffer,
-                    plaintext.len(),
-                ),
-            16 => Aes128CbcEnc::new(key.into(), iv.into())
-                .encrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(
-                    &mut buffer,
-                    plaintext.len(),
-                ),
-            _ => unreachable!(),
-        }
-        .map_err(|e| anyhow!("AES CBC encryption failed: {:?}", e))?;
-
-        let mut result = Vec::with_capacity(SALT_LEN + buffer.len());
-        result.extend_from_slice(&salt);
-        result.extend(buffer);
-
-        Ok(result)
+        let master_key = self.load_master_key()?;
+        let (cipher_text, nonce_bytes, salt) =
+            Self::encrypt_text_aes_gcm(plaintext, &master_key, encryption_mode)?;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(&nonce_bytes);
+        bytes.extend(cipher_text.iter());
+        Ok(bytes)
     }
 
-    fn decrypt_text_aes_cbc_with_master_key(
+    /// Decrypts an AES-GCM bundle back into a plain byte vector.
+    ///
+    /// This method expects the bundle format:
+    /// `[Salt (16 bytes)][IV/Nonce (12 bytes)][Ciphertext (variable)][Tag (16 bytes)]`
+    pub fn decrypt_text_aes_gcm_bundle(
+        &self,
         ciphertext: &[u8],
         encryption_mode: u8,
-        master_key: &[u8],
     ) -> anyhow::Result<Vec<u8>> {
-        type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-        type Aes192CbcDec = cbc::Decryptor<aes::Aes192>;
-        type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
-
-        if ciphertext.len() <= SALT_LEN {
-            return Err(anyhow!("Ciphertext too short"));
+        if ciphertext.len() < SALT_LEN + NONCE_LEN {
+            return Err(anyhow!("Not enough bytes to decrypt the text"));
         }
-
-        let key_len = match encryption_mode {
-            Encryption::AES_256_CBC => 32,
-            Encryption::AES_192_CBC => 24,
-            Encryption::AES_128_CBC => 16,
-            _ => return Err(anyhow!("Invalid encryption mode: {}", encryption_mode)),
-        };
-
+        let master_key = self.load_master_key()?;
         let salt = &ciphertext[..SALT_LEN];
-        let encrypted_data = &ciphertext[SALT_LEN..];
-
-        let mut derived = vec![0u8; key_len + 16];
-        pbkdf2_hmac::<Sha256>(master_key, salt, PBKDF2_ITERATIONS, &mut derived);
-
-        let key = &derived[..key_len];
-        let iv = &derived[key_len..];
-
-        let mut buffer = encrypted_data.to_vec();
-        let len = match key_len {
-            32 => Aes256CbcDec::new(key.into(), iv.into())
-                .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buffer),
-            24 => Aes192CbcDec::new(key.into(), iv.into())
-                .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buffer),
-            16 => Aes128CbcDec::new(key.into(), iv.into())
-                .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buffer),
-            _ => unreachable!(),
-        }
-        .map_err(|e| anyhow!("AES CBC decryption failed: {:?}", e))?
-        .len();
-
-        buffer.truncate(len);
-        Ok(buffer)
-    }
-
-    pub fn encrypt_text_aes_cbc(
-        &self,
-        plaintext: &[u8],
-        encryption_mode: u8,
-    ) -> anyhow::Result<Vec<u8>> {
-        let master_key = self.load_master_key()?;
-        Self::encrypt_text_aes_cbc_with_master_key(plaintext, encryption_mode, &master_key[..])
-    }
-
-    pub fn decrypt_text_aes_cbc(
-        &self,
-        ciphertext: &[u8],
-        encryption_mode: u8,
-    ) -> anyhow::Result<Vec<u8>> {
-        let master_key = self.load_master_key()?;
-        Self::decrypt_text_aes_cbc_with_master_key(ciphertext, encryption_mode, &master_key[..])
+        let nonce = &ciphertext[SALT_LEN..SALT_LEN + NONCE_LEN];
+        Self::decrypt_text_aes_gcm(
+            &ciphertext[(SALT_LEN + NONCE_LEN)..],
+            &master_key,
+            nonce,
+            salt,
+            encryption_mode,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constant::Encryption;
-
-    const CBC_TEST_MASTER_KEY: &[u8] = b"cbc_test_master_key_material";
 
     #[test]
     fn test_base64_encode_decode() {
@@ -701,90 +708,97 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_decrypt_aes_cbc() {
-        let plaintext = b"Hello, World! This is a test for AES-CBC encryption.";
+    fn test_encrypt_decrypt_aes_gcm_bundle() {
+        // Use a temporary path for the master key to ensure hermeticity
+        let temp_dir = std::env::temp_dir();
+        let key_path = temp_dir.join(format!("pgmoneta_test_{}.key", rand::random::<u32>()));
+        let sutil = SecurityUtil::new_with_path(key_path.clone());
 
-        let encrypted = SecurityUtil::encrypt_text_aes_cbc_with_master_key(
-            plaintext,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-256-CBC encryption should succeed");
-        assert!(!encrypted.is_empty());
-        assert_ne!(encrypted, plaintext.to_vec());
+        // Ensure we clean up after the test
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(key_path);
 
-        let decrypted = SecurityUtil::decrypt_text_aes_cbc_with_master_key(
-            &encrypted,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-256-CBC decryption should succeed");
-        assert_eq!(decrypted, plaintext.to_vec());
+        sutil
+            .write_master_key("ci_test_master_key")
+            .expect("Failed to write a temporary master key for testing");
 
-        let encrypted = SecurityUtil::encrypt_text_aes_cbc_with_master_key(
-            plaintext,
-            Encryption::AES_192_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-192-CBC encryption should succeed");
-        let decrypted = SecurityUtil::decrypt_text_aes_cbc_with_master_key(
-            &encrypted,
-            Encryption::AES_192_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-192-CBC decryption should succeed");
-        assert_eq!(decrypted, plaintext.to_vec());
+        let plaintext: &[u8] = b"Hello, World! This is a test for AES-GCM encryption.";
+        let encryption_modes = vec![
+            Encryption::AES_128_GCM,
+            Encryption::AES_192_GCM,
+            Encryption::AES_256_GCM,
+        ];
 
-        let encrypted = SecurityUtil::encrypt_text_aes_cbc_with_master_key(
-            plaintext,
-            Encryption::AES_128_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-128-CBC encryption should succeed");
-        let decrypted = SecurityUtil::decrypt_text_aes_cbc_with_master_key(
-            &encrypted,
-            Encryption::AES_128_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("AES-128-CBC decryption should succeed");
-        assert_eq!(decrypted, plaintext.to_vec());
+        for mode in encryption_modes {
+            let bundle = sutil
+                .encrypt_text_aes_gcm_bundle(plaintext, mode)
+                .expect("AES-GCM bundle encryption should succeed");
+
+            // Verify bundle format: [SALT(16) | NONCE(12) | CIPHERTEXT+TAG]
+            assert!(bundle.len() >= SALT_LEN + NONCE_LEN);
+            let salt = &bundle[..SALT_LEN];
+            let nonce = &bundle[SALT_LEN..SALT_LEN + NONCE_LEN];
+            let cipher_at_rest = &bundle[SALT_LEN + NONCE_LEN..];
+
+            // Manually verify decryption with raw decrypt function to ensure format is what we think it is
+            let master_key = sutil.load_master_key().unwrap();
+            let decrypted =
+                SecurityUtil::decrypt_text_aes_gcm(cipher_at_rest, &master_key, nonce, salt, mode)
+                    .expect("Decryption should succeed");
+            assert_eq!(decrypted, plaintext.to_vec());
+
+            // verify round-trip via bundle API
+            let decrypted_bundle = sutil
+                .decrypt_text_aes_gcm_bundle(&bundle, mode)
+                .expect("AES-GCM bundle decryption should succeed");
+            assert_eq!(decrypted_bundle, plaintext.to_vec());
+        }
     }
 
     #[test]
-    fn test_encrypt_decrypt_aes_cbc_empty_data() {
+    fn test_encrypt_decrypt_aes_gcm_empty_data() {
         let plaintext: &[u8] = b"";
+        let master_key = b"gcm_test_master_key_material!";
 
-        let encrypted = SecurityUtil::encrypt_text_aes_cbc_with_master_key(
-            plaintext,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("Encryption should succeed");
-        let decrypted = SecurityUtil::decrypt_text_aes_cbc_with_master_key(
-            &encrypted,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
+        let (cipher_text, nonce_bytes, salt) =
+            SecurityUtil::encrypt_text_aes_gcm(plaintext, master_key, Encryption::AES_256_GCM)
+                .expect("AES-GCM encryption should succeed");
+
+        let decrypted = SecurityUtil::decrypt_text_aes_gcm(
+            &cipher_text,
+            master_key,
+            &nonce_bytes,
+            &salt,
+            Encryption::AES_256_GCM,
         )
         .expect("Decryption should succeed");
+
         assert_eq!(decrypted, plaintext.to_vec());
     }
 
     #[test]
-    fn test_encrypt_decrypt_aes_cbc_large_data() {
+    fn test_encrypt_decrypt_aes_gcm_large_data() {
         let plaintext: Vec<u8> = vec![b'A'; 10000];
+        let master_key = b"gcm_test_master_key_material!";
 
-        let encrypted = SecurityUtil::encrypt_text_aes_cbc_with_master_key(
-            &plaintext,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
-        )
-        .expect("Encryption should succeed");
-        let decrypted = SecurityUtil::decrypt_text_aes_cbc_with_master_key(
-            &encrypted,
-            Encryption::AES_256_CBC,
-            CBC_TEST_MASTER_KEY,
+        let (cipher_text, nonce_bytes, salt) =
+            SecurityUtil::encrypt_text_aes_gcm(&plaintext, master_key, Encryption::AES_256_GCM)
+                .expect("AES-GCM encryption should succeed");
+
+        let decrypted = SecurityUtil::decrypt_text_aes_gcm(
+            &cipher_text,
+            master_key,
+            &nonce_bytes,
+            &salt,
+            Encryption::AES_256_GCM,
         )
         .expect("Decryption should succeed");
+
         assert_eq!(decrypted, plaintext);
     }
 }

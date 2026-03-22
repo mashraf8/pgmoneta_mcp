@@ -26,3 +26,23 @@ old method cannot be decrypted by version 0.2.0.
    pgmoneta-mcp-admin user add -U <username> -P <password> -f <admins_file>
    ```
 6. Restart pgmoneta-mcp
+
+### AES-GCM Upgrade
+
+The encryption system has been upgraded to exclusively use **AES-GCM** (Galois/Counter Mode). Support for legacy CBC and CTR modes has been removed.
+
+**Changes:**
+1.  **Strict Enforcement**: Legacy identifiers (`aes_256_cbc`, etc.) are no longer supported.
+2.  **Unified Protocol**: All encrypted communication now strictly follows the AES-GCM bundle format.
+3.  **Expanded Bit-Length**: Native support for 128, 192, and 256-bit GCM.
+
+**Action Required:**
+- Update `pgmoneta-mcp.conf` and set the `encryption` field to one of:
+  - `aes_256_gcm` (Recommended)
+  - `aes_192_gcm`
+  - `aes_128_gcm`
+  - `none`
+
+> [!WARNING]
+> This is a breaking change. If your configuration continues to use legacy identifiers (`aes_256_cbc`, etc.), the MCP server will now return an explicit error and fail to connect. You MUST update your configuration to a supported GCM mode.
+

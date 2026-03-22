@@ -49,11 +49,11 @@ The security module provides the following capabilities:
 | Algorithm | Identifier | Description |
 |-----------|------------|-------------|
 | None | 0 | No encryption |
-| **AES-256-CBC** | **1** | **256-bit AES in CBC mode (default)** |
-| AES-192-CBC | 2 | 192-bit AES in CBC mode |
-| AES-128-CBC | 3 | 128-bit AES in CBC mode |
+| **AES-256-GCM** | **1** | **256-bit AES in GCM mode (default)** |
+| AES-192-GCM | 2 | 192-bit AES in GCM mode |
+| AES-128-GCM | 3 | 128-bit AES in GCM mode |
 
-**Default**: `aes_256_cbc` - industry standard encryption with PBKDF2 key derivation
+**Default**: `aes_256_gcm` - industry standard authenticated encryption with PBKDF2 key derivation
 
 ### Configuration
 
@@ -64,7 +64,7 @@ Security settings are configured in the `[pgmoneta]` section of the configuratio
 host = localhost
 port = 5001
 compression = zstd
-encryption = aes_256_cbc
+encryption = aes_256_gcm
 ```
 
 ### Data Protection
