@@ -90,12 +90,9 @@ struct RequestHeader {
 
 - **encryption**: Encryption algorithm
   - `Encryption::NONE` (0): No encryption (default)
-  - `Encryption::AES_256_CBC` (1): AES-256-CBC
-  - `Encryption::AES_192_CBC` (2): AES-192-CBC
-  - `Encryption::AES_128_CBC` (3): AES-128-CBC
-  - `Encryption::AES_256_CTR` (4): AES-256-CTR
-  - `Encryption::AES_192_CTR` (5): AES-192-CTR
-  - `Encryption::AES_128_CTR` (6): AES-128-CTR
+  - `Encryption::AES_256_GCM` (1): AES-256-GCM
+  - `Encryption::AES_192_GCM` (2): AES-192-GCM
+  - `Encryption::AES_128_GCM` (3): AES-128-GCM
 
 #### PgmonetaRequest
 

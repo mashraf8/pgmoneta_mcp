@@ -32,17 +32,55 @@ COPY conf/pg_hba.conf /conf-postgres/pg_hba.conf
 COPY conf/setup.sql /conf-postgres/setup.sql
 
 # copy executables
-COPY --chmod=755 usr/bin/run-pgmoneta /usr/bin/run-pgmoneta
-COPY --chmod=755 usr/bin/run-postgresql /usr/bin/run-postgresql
-COPY --chmod=755 usr/bin/entry /usr/bin/entry
+COPY usr/bin/run-pgmoneta /usr/bin/run-pgmoneta
+COPY usr/bin/run-postgresql /usr/bin/run-postgresql
+COPY usr/bin/entry /usr/bin/entry
 
-# install needed packages
+RUN chmod 755 /usr/bin/run-pgmoneta /usr/bin/run-postgresql /usr/bin/entry
+
+# install needed packages and build dependencies
 RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm \
- && rpm -Uvh https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-x86_64/pgdg-redhat-repo-latest.noarch.rpm \
+ && rpm -Uvh https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm \
+ && dnf install -y 'dnf-command(config-manager)' \
+ && dnf config-manager --set-enabled crb \
  && dnf -y update \
- && dnf -y install wget tar crontabs  \
+ && dnf -y install wget tar crontabs git gcc make cmake openssl-devel systemd-devel zlib-devel bzip2-devel libarchive-devel libssh-devel libatomic python3-docutils \
+ && (dnf -y install ncurses-devel || dnf -y install libncurses-devel) \
  && dnf -y install postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs \
- && dnf -y install pgmoneta \
+ && (dnf -y install zstd-devel || dnf -y install libzstd-devel) \
+ && (dnf -y install lz4-devel || dnf -y install liblz4-devel) \
+ && (dnf -y install cjson-devel || dnf -y install libcjson-devel)
+
+# Build libev from source (matching check.sh)
+RUN mkdir -p /tmp/libev-src \
+ && curl -fsSL -o /tmp/libev-src/libev.tar.gz "https://dist.schmorp.de/libev/libev-4.33.tar.gz" \
+ && tar -xzf /tmp/libev-src/libev.tar.gz -C /tmp/libev-src \
+ && cd /tmp/libev-src/libev-4.33 \
+ && ./configure --prefix=/usr \
+ && make -j$(nproc) \
+ && make install \
+ && rm -rf /tmp/libev-src
+
+# Build libyaml from source (matching check.sh)
+RUN dnf install -y autoconf automake libtool \
+ && mkdir -p /tmp/libyaml-src \
+ && curl -fsSL -o /tmp/libyaml-src/libyaml.tar.gz "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz" \
+ && tar -xzf /tmp/libyaml-src/libyaml.tar.gz -C /tmp/libyaml-src \
+ && cd /tmp/libyaml-src/libyaml-0.2.5 \
+ && ./bootstrap \
+ && ./configure --prefix=/usr \
+ && make -j$(nproc) \
+ && make install \
+ && rm -rf /tmp/libyaml-src
+
+# Build pgmoneta from main branch
+RUN git clone --depth 1 --branch main https://github.com/pgmoneta/pgmoneta.git /tmp/pgmoneta-main \
+ && mkdir -p /tmp/pgmoneta-main/build \
+ && cd /tmp/pgmoneta-main/build \
+ && cmake -DDOCS=false -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr .. \
+ && make -j$(nproc) \
+ && make install \
+ && rm -rf /tmp/pgmoneta-main \
  && dnf -y clean all
 
 RUN useradd -ms /bin/bash pgmoneta \
@@ -51,7 +89,8 @@ RUN useradd -ms /bin/bash pgmoneta \
  && chown pgmoneta:pgmoneta /home/pgmoneta/.pgmoneta
 
 ## copy master key
-COPY --chown=pgmoneta:pgmoneta --chmod=600 ./master.key /home/pgmoneta/.pgmoneta/master.key
+COPY --chown=pgmoneta:pgmoneta ./master.key /home/pgmoneta/.pgmoneta/master.key
+RUN chmod 600 /home/pgmoneta/.pgmoneta/master.key
 
 RUN chown -R pgmoneta:pgmoneta /conf-pgmoneta /pgmoneta \
  && chown -R postgres:postgres /conf-postgres /pgdata /pgwal /pglog \

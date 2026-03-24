@@ -187,7 +187,11 @@ copy_master_key() {
     fi
     mkdir -p "$PGMONETA_MCP_DIR"
     chmod 700 "$PGMONETA_MCP_DIR"
-    cat "$MASTER_KEY_PATH" > "$MCP_MASTER_KEY_FILE"
+    if [[ "$MASTER_KEY_PATH" != "$MCP_MASTER_KEY_FILE" ]]; then
+        cat "$MASTER_KEY_PATH" > "$MCP_MASTER_KEY_FILE"
+    else
+        echo "Master key source and destination are identical; skipping copy to avoid truncation."
+    fi
     chmod 600 "$MCP_MASTER_KEY_FILE"
 }
 
@@ -277,15 +281,159 @@ ci_wait_for_pgmoneta() {
     done
 }
 
+ci_install_libev_from_source() {
+    local workdir="/tmp/libev-src"
+    local tarball="$workdir/libev.tar.gz"
+    local extracted_dir=""
+
+    rm -rf "$workdir"
+    mkdir -p "$workdir"
+
+    # Prefer official release tarball; keep a mirror fallback.
+    if ! curl -fsSL -o "$tarball" "https://dist.schmorp.de/libev/libev-4.33.tar.gz"; then
+        curl -fsSL -o "$tarball" "https://github.com/enki/libev/archive/refs/tags/v4.33.tar.gz"
+    fi
+
+    tar -xzf "$tarball" -C "$workdir"
+    extracted_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+
+    if [ -z "$extracted_dir" ]; then
+        echo "Error: unable to extract libev source archive"
+        return 1
+    fi
+
+    pushd "$extracted_dir" >/dev/null
+
+    if [ -x ./configure ]; then
+        ./configure --prefix=/usr
+    else
+        if [ -x ./autogen.sh ]; then
+            ./autogen.sh
+        fi
+        ./configure --prefix=/usr
+    fi
+
+    make -j"$(nproc)"
+    make install
+    ldconfig || true
+
+    popd >/dev/null
+}
+
+ci_install_libyaml_from_source() {
+    local workdir="/tmp/libyaml-src"
+    local tarball="$workdir/libyaml.tar.gz"
+    local extracted_dir=""
+
+    rm -rf "$workdir"
+    mkdir -p "$workdir"
+
+    curl -fsSL -o "$tarball" "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz"
+
+    tar -xzf "$tarball" -C "$workdir"
+    extracted_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+
+    if [ -z "$extracted_dir" ]; then
+        echo "Error: unable to extract libyaml source archive"
+        return 1
+    fi
+
+    pushd "$extracted_dir" >/dev/null
+
+    if [ ! -x ./configure ]; then
+        dnf install -y autoconf automake libtool
+        if [ -x ./bootstrap ]; then
+            ./bootstrap
+        else
+            autoreconf -fi
+        fi
+    fi
+
+    ./configure --prefix=/usr
+    make -j"$(nproc)"
+    make install
+    ldconfig || true
+    popd >/dev/null
+}
+
 ci_install_utilities() {
     local arch
     arch="$(uname -m)"
+
+    install_first_available_pkg() {
+        for candidate in "$@"; do
+            if dnf install -y "$candidate" >/dev/null 2>&1; then
+                return 0
+            fi
+        done
+
+        echo "Error: none of the candidate packages are available: $*"
+        return 1
+    }
+
     rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
     rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+
+    # EPEL notes that many packages (including devel headers) may require CRB.
+    if command -v crb >/dev/null 2>&1; then
+        crb enable || true
+    fi
+
     dnf update -y
-    dnf install -y cargo nmap-ncat
+    dnf install -y cargo nmap-ncat git gcc clang cmake make
+
+    # pgmoneta source build requires libev headers; install by pkg-config provide first.
+    if ! dnf install -y libev 'pkgconfig(libev)'; then
+        if dnf info -q libev-devel >/dev/null 2>&1; then
+            dnf install -y libev libev-devel
+        else
+            echo "libev development package not available; building libev from source"
+            ci_install_libev_from_source
+        fi
+    fi
+
+    dnf install -y openssl openssl-devel systemd systemd-devel zlib zlib-devel
+    install_first_available_pkg ncurses-devel 'pkgconfig(ncurses)'
+    dnf install -y zstd lz4 libssh bzip2
+    install_first_available_pkg zstd-devel libzstd-devel
+    install_first_available_pkg lz4-devel liblz4-devel
+    install_first_available_pkg cjson libcjson
+    install_first_available_pkg cjson-devel libcjson-devel
+    install_first_available_pkg libyaml yaml
+    if ! install_first_available_pkg libyaml-devel yaml-devel 'pkgconfig(yaml-0.1)'; then
+        echo "libyaml development package not available; building libyaml from source"
+        ci_install_libyaml_from_source
+    fi
+    dnf install -y libssh-devel bzip2-devel
+    dnf install -y libarchive libarchive-devel python3-docutils libatomic
     dnf install -y postgresql18 postgresql18-server postgresql18-contrib postgresql18-libs
-    dnf install -y pgmoneta
+}
+
+ci_install_pgmoneta_from_main() {
+    local repo_dir="/tmp/pgmoneta-main"
+
+    echo "Installing pgmoneta from main branch..."
+    rm -rf "$repo_dir"
+    git clone --depth 1 --branch main https://github.com/pgmoneta/pgmoneta.git "$repo_dir"
+
+    mkdir -p "$repo_dir/build"
+    pushd "$repo_dir/build" >/dev/null
+    cmake -DDOCS=false -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
+    make -j"$(nproc)"
+    make install
+    popd >/dev/null
+
+    command -v pgmoneta >/dev/null 2>&1 || {
+        echo "Error: pgmoneta binary not found after build/install"
+        exit 1
+    }
+    command -v pgmoneta-admin >/dev/null 2>&1 || {
+        echo "Error: pgmoneta-admin binary not found after build/install"
+        exit 1
+    }
+
+    echo "Using pgmoneta version:"
+    pgmoneta --version || true
 }
 
 ci_handle_master_key() {
@@ -311,15 +459,28 @@ EOF
 ci_setup() {
     mkdir -p /pgdata /pgwal /pgmoneta /pglog
     ci_install_utilities
+    ci_install_pgmoneta_from_main
     ci_create_users
     ci_handle_master_key
     cp "$CONF_FILES"/* /tmp/
+    # Increase server verbosity in CI to aid protocol-interoperability debugging
+    sed -i 's/^log_level = .*/log_level = debug/' /tmp/pgmoneta.conf || true
     ci_run_postgresql
     ci_run_pgmoneta
 }
 
+ci_dump_logs() {
+    echo "=== pgmoneta log (tail) ==="
+    if [ -f /tmp/pgmoneta.log ]; then
+        tail -n 300 /tmp/pgmoneta.log || true
+    else
+        echo "No /tmp/pgmoneta.log file found"
+    fi
+}
+
 ci_shutdown() {
     echo "Stopping CI services..."
+    ci_dump_logs
     [ -n "${PGMONETA_PID:-}" ] && kill -TERM "$PGMONETA_PID" >/dev/null 2>&1 || true
     [ -n "${POSTGRES_PID:-}" ] && kill -TERM "$POSTGRES_PID" >/dev/null 2>&1 || true
     sleep 1
@@ -437,6 +598,16 @@ install_dependencies() {
     dnf install -y cargo # currently we just need cargo to run pgmoneta-mcp, others are installed in the ci or by docker/podman
 }
 
+run_info_test_matrix() {
+    echo "Running full compression/encryption info_test matrix..."
+    for comp in none gzip zstd lz4 bzip2; do
+        for enc in none aes_128_gcm aes_192_gcm aes_256_gcm; do
+            echo "Matrix mode: compression=$comp encryption=$enc"
+            PGMONETA_MCP_COMPRESSION="$comp" PGMONETA_MCP_ENCRYPTION="$enc" cargo test --test info_test -- --test-threads=1 --nocapture --include-ignored
+        done
+    done
+}
+
 ## ================================
 ## Main script logic
 ## ================================
@@ -446,16 +617,17 @@ usage() {
    echo " setup          Install Dependencies e.g (Rust, Cargo) required for building and running tests"
    echo " build          Set up environment (build, postgreSQL and pgmoneta composed image) without running tests"
    echo " clean          Clean up test suite environment and remove the composed image"
-   echo " test           Starts the composed container and run full test suite (clean + build + test)"
+    echo " test           Starts the composed container and runs the full test suite"
    echo " integration    Starts the composed container and run only integration tests (clean + build + integration)"
-   echo " unit           Starts the composed container and run only unit tests (clean + build + unit)"
-   echo " ci             Run full test suite with CI-specific settings"
+    echo " unit           Clean + build environment, then run only unit tests"
+    echo " unit-only      Alias for 'unit'"
+    echo " ci             Run only the 20-mode info_test matrix with CI-specific settings"
    echo " status         Show test environment status (image, container, ports, master key)"
    echo "Options (run tests with optional filter; default is full suite):"
    echo " -m, --module NAME   Run all tests in module NAME"
    echo "Examples:"
-   echo "  $0                  Run full test suite"
-   echo "  $0 test             Run full test suite"
+    echo "  $0                  Run full test suite"
+    echo "  $0 test             Run full test suite"
    echo "  $0 build            Set up environment only; then run e.g. $0 test -m security"
    echo "  $0 test -m security       Run all tests in module 'security'"
    echo "  $0 integration -m info_test    Run integration tests in module 'info_test'"
@@ -498,6 +670,11 @@ case "$1" in
         shift
         ;;
     unit)
+        [[ -n "$SUBCOMMAND" ]] && usage
+        SUBCOMMAND="unit"
+        shift
+        ;;
+    unit-only)
         [[ -n "$SUBCOMMAND" ]] && usage
         SUBCOMMAND="unit"
         shift
@@ -554,10 +731,11 @@ case "$SUBCOMMAND" in
         build_test_suite
         start_composed_container
         trap stop_composed_container EXIT
+        run_info_test_matrix
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test --all-features -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test --all-features -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test --all-features -- --test-threads=1 --nocapture
+            cargo test --all-features -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
     integration)
@@ -566,12 +744,15 @@ case "$SUBCOMMAND" in
         start_composed_container
         trap stop_composed_container EXIT
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test --test "*" -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test --test "*" -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test --test "*" -- --test-threads=1 --nocapture
+            cargo test --test "*" -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
     unit)
+        cleanup
+        handle_master_key
+        build_test_suite
         if [[ -n "$MODULE_FILTER" ]]; then
             cargo test --lib -- --test-threads=1 --nocapture -- $MODULE_FILTER
         else
@@ -581,7 +762,9 @@ case "$SUBCOMMAND" in
     ci)
         trap ci_shutdown EXIT
         ci_setup
-        cargo test -- --test-threads=1 --nocapture
+        run_info_test_matrix
+
+        echo "Skipping default cargo test suite in ci mode; unit tests are handled in dedicated CI jobs."
         ;;
     "")
         cleanup
@@ -589,10 +772,11 @@ case "$SUBCOMMAND" in
         build_test_suite
         start_composed_container
         trap stop_composed_container EXIT
+        run_info_test_matrix
         if [[ -n "$MODULE_FILTER" ]]; then
-            cargo test -- --test-threads=1 --nocapture -- $MODULE_FILTER
+            cargo test -- --test-threads=1 --nocapture --include-ignored -- $MODULE_FILTER
         else
-            cargo test -- --test-threads=1 --nocapture
+            cargo test -- --test-threads=1 --nocapture --include-ignored
         fi
         ;;
 esac

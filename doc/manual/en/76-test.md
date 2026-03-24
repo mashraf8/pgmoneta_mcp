@@ -10,7 +10,7 @@
 - **Integration tests**: Test end-to-end functionality with a running pgmoneta server
 - **Container-based tests**: Automated testing with Docker/Podman containers
 
-All tests are written using Rust's built-in testing framework and can be run using `cargo test`.
+All tests are written using Rust's built-in testing framework. For project-level integration coverage, use `test/check.sh`; for Rust-only execution, use `cargo test`.
 
 ### Dependencies
 
@@ -73,34 +73,26 @@ cargo test -- --nocapture
 
 #### Integration Tests
 
-Integration tests are located in `tests/integration_test.rs` and test the complete system with a running pgmoneta server.
+Integration tests verify end-to-end functionality using a running pgmoneta server. Most integration tests are located in `tests/info_test.rs` and `tests/list_backup_test.rs`, and they are designed to be run against a matrix of security and compression settings.
 
 **Running integration tests**:
 ```bash
-# Run all integration tests (requires pgmoneta server)
-cargo test --test integration_test -- --ignored
+# Run non-ignored integration tests (local handler tests)
+cargo test --test handler_test
 
-# Run specific integration test
-cargo test --test integration_test test_handler_say_hello -- --ignored
+# Run ignored integration tests that require pgmoneta stack
+cargo test --test info_test -- --ignored
+cargo test --test list_backup_test -- --ignored
 ```
 
-**Note**: Integration tests are marked with `#[ignore]` because they require:
-- Running pgmoneta server on localhost:2345
-- Configured admin user
-- Master key set up
-- At least one server configured in pgmoneta
+**Note**: Integration tests require a running pgmoneta stack (see `test/check.sh`).
 
 **Available integration tests**:
 
-- `test_handler_say_hello`: Test basic MCP handler response
-- `test_handler_get_backup_info_latest`: Get latest backup information
-- `test_handler_get_backup_info_oldest`: Get oldest backup information
-- `test_handler_list_backups`: List backups in ascending order
-- `test_handler_list_backups_descending`: List backups in descending order
-- `test_handler_initialization`: Handler initialization
-- `test_security_util_creation`: Security utility creation
-- `test_password_generation`: Password generation
-- `test_encryption_roundtrip`: Encryption roundtrip
+- `info_test` (`tests/info_test.rs`, ignored): Get backup information. In CI, this is run as a **20-combination matrix** (5 compression modes × 4 encryption modes).
+- `list_backup_test` (`tests/list_backup_test.rs`, ignored): List backups for a server.
+- `test_handler_initialization` (`tests/handler_test.rs`): Verifies MCP handler initialization and capability reporting.
+- `test_handler_default_trait` (`tests/handler_test.rs`): Verifies `Default` trait implementation for the handler.
 
 ### Running Tests
 
@@ -125,13 +117,16 @@ The script then runs pgmoneta_mcp tests in your local environment. The tests are
 Run `<PATH_TO_PGMONETA>/test/check.sh build` to prepare the test environment (image, master key generation) without running tests. This always does a full build.
 
 ### Fast Iteration of testing
-Run `<PATH_TO_PGMONETA_MCP>/test/check.sh test` to run the full test suite without rebuilding the composed image
+Run `<PATH_TO_PGMONETA_MCP>/test/check.sh test` to run the full test suite without rebuilding the composed image.
 
 ### Unit tests
 To run unit tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh unit`
 
 ### Integration tests
 To run integration tests only, simply run `<PATH_TO_PGMONETA_MCP>/test/check.sh integration`
+
+### CI matrix-only mode
+To run CI integration coverage only, run `<PATH_TO_PGMONETA_MCP>/test/check.sh ci`. This mode runs only the 20-combination `info_test` matrix and skips the regular full test suite.
 
 ### Single test or module
 Run `<PATH_TO_PGMONETA>/test/check.sh test -m <test_name>`. The script assumes the environment is up, so you need to run the full suite first. For quick iteration, run `<PATH_TO_PGMONETA>/test/check.sh build` once, then `<PATH_TO_PGMONETA>/test/check.sh test -m <module_name>` or `<PATH_TO_PGMONETA>/test/check.sh test` repeatedly.
@@ -141,7 +136,7 @@ Run `<PATH_TO_PGMONETA>/test/check.sh test -m <test_name>`. The script assumes t
 By default, Rust runs tests in parallel. For integration tests that share resources, run sequentially:
 
 ```bash
-cargo test --test integration_test -- --test-threads=1 --ignored
+cargo test -- --test-threads=1 --ignored
 ```
 
 It is recommended that you **ALWAYS** run tests before raising PR.

@@ -2,13 +2,17 @@
 
 ## From 0.1.x to 0.2.0
 
-### Vault Encryption
+### Two-Step Vault Encryption
 
-The key derivation for vault file encryption has been upgraded to
-`PKCS5_PBKDF2_HMAC` (SHA-256, random 16-byte salt, 600,000 iterations).
+The key derivation for vault file encryption has been upgraded to a **two-step PBKDF2-HMAC-SHA256** process:
 
-This is a **breaking change**. Existing vault files encrypted with the
-old method cannot be decrypted by version 0.2.0.
+1.  **Master Derivation**: Master Password + Master Salt -> Derived Master Key (600,000 iterations).
+2.  **File Derivation**: Derived Master Key + File Salt -> Final Encryption Key (1 iteration).
+
+This is a **breaking change**. The `master.key` file now requires a specific **two-line format**:
+
+1.  **Line 1**: Base64-encoded master password.
+2.  **Line 2**: Base64-encoded master salt (16 bytes).
 
 **Action required:**
 
@@ -16,8 +20,8 @@ old method cannot be decrypted by version 0.2.0.
 2. Delete the existing admin configuration file:
    - `pgmoneta_admins.conf` (or the file specified with `-f`)
 3. Delete the existing master key:
-   - On Linux/Unix: `rm ~/.pgmoneta/master.key`
-4. Regenerate the master key:
+   - On Linux/Unix: `rm ~/.pgmoneta-mcp/master.key`
+4. Regenerate the master key (this will create the new two-line format):
    ```
    pgmoneta-mcp-admin master-key
    ```

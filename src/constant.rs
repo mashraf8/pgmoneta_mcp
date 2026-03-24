@@ -133,8 +133,10 @@ impl Command {
     }
 }
 impl Format {
+    /// Standard TEXT output format.
+    pub const TEXT: u8 = 0;
     /// Standard JSON output format.
-    pub const JSON: u8 = 0;
+    pub const JSON: u8 = 1;
 
     /// Translates a numeric format code into its string representation.
     ///
@@ -145,6 +147,7 @@ impl Format {
     /// Returns the string literal for the format, or an error if the code is unrecognized.
     pub fn translate_format_enum(format: u8) -> anyhow::Result<&'static str> {
         match format {
+            Self::TEXT => Ok("text"),
             Self::JSON => Ok("json"),
             default => Err(anyhow!("Unrecognized format enum: {default}")),
         }

@@ -16,6 +16,7 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use pgmoneta_mcp::configuration::{self, UserConf};
 use pgmoneta_mcp::security::SecurityUtil;
+use rand::RngCore;
 use rpassword::prompt_password;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -162,13 +163,14 @@ impl User {
         let path = Path::new(file);
         let sutil = SecurityUtil::new();
         let mut conf: UserConf;
-        let master_key = sutil.load_master_key().map_err(|e| {
+        let (master_password, master_salt) = sutil.load_master_key().map_err(|e| {
             anyhow!(
                 "Unable to load the master key, needed for adding user: {:?}",
                 e
             )
         })?;
-        let password_str = sutil.encrypt_to_base64_string(password.as_bytes(), &master_key[..])?;
+        let password_str =
+            sutil.encrypt_to_base64_string(password.as_bytes(), &master_password, &master_salt)?;
 
         if !path.exists() || path.is_dir() {
             conf = HashMap::new();
@@ -250,14 +252,15 @@ impl User {
             return Err(anyhow!("User file '{}' does not exist", file));
         }
 
-        let master_key = sutil.load_master_key().map_err(|e| {
+        let (master_password, master_salt) = sutil.load_master_key().map_err(|e| {
             anyhow!(
                 "Unable to load the master key, needed for editing user: {:?}",
                 e
             )
         })?;
 
-        let password_str = sutil.encrypt_to_base64_string(password.as_bytes(), &master_key[..])?;
+        let password_str =
+            sutil.encrypt_to_base64_string(password.as_bytes(), &master_password, &master_salt)?;
 
         let mut conf = configuration::load_user_configuration(file)?;
 
@@ -405,7 +408,9 @@ impl MasterKey {
             &final_password
         };
 
-        sutil.write_master_key(master_key)?;
+        let mut salt = [0u8; 16];
+        rand::rng().fill_bytes(&mut salt);
+        sutil.write_master_key(master_key, &salt)?;
 
         User::print_response(
             format,
@@ -439,10 +444,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_add_edit_remove_user() {
         let temp_file = get_temp_file("pgmoneta_mcp_test_users.conf");
         let temp_file_str = temp_file.to_str().unwrap();
+
+        // Ensure master key exists for testing
+        let sutil = SecurityUtil::new();
+        if sutil.load_master_key().is_err() {
+            MasterKey::set_master_key(Some("test_master_pass"), false, 64, OutputFormat::Text)
+                .unwrap();
+        }
 
         // Clean up before test
         if temp_file.exists() {
@@ -453,30 +464,31 @@ mod tests {
         User::add_user(temp_file_str, "test_user", "test_pass", OutputFormat::Text).unwrap();
 
         // Verify user was added
-        let content = fs::read_to_string(&temp_file).unwrap();
-        let users: UserConf = serde_ini::from_str(&content).unwrap();
-        assert!(users.contains_key("admins"));
-        assert!(users["admins"].contains_key("test_user"));
-        assert!(!users["admins"]["test_user"].is_empty());
+        let content_added = fs::read_to_string(&temp_file).unwrap();
+        let users_added: UserConf = serde_ini::from_str(&content_added).unwrap();
+        assert!(users_added.contains_key("admins"));
+        assert!(users_added["admins"].contains_key("test_user"));
+        assert!(!users_added["admins"]["test_user"].is_empty());
 
         // Edit the user
         User::edit_user(temp_file_str, "test_user", "new_pass", OutputFormat::Text).unwrap();
 
         // Verify user was edited
-        let content = fs::read_to_string(&temp_file).unwrap();
-        let users: UserConf = serde_ini::from_str(&content).unwrap();
-        let content2 = fs::read_to_string(&temp_file).unwrap();
-        let users2: UserConf = serde_ini::from_str(&content2).unwrap();
-        assert_ne!(users["admins"]["test_user"], users2["admins"]["test_user"]);
+        let content_edited = fs::read_to_string(&temp_file).unwrap();
+        let users_edited: UserConf = serde_ini::from_str(&content_edited).unwrap();
+        assert_ne!(
+            users_added["admins"]["test_user"],
+            users_edited["admins"]["test_user"]
+        );
 
         // Remove the user
         User::remove_user(temp_file_str, "test_user", OutputFormat::Text).unwrap();
 
         // Verify user was removed
-        let content = fs::read_to_string(&temp_file).unwrap();
-        let users: UserConf = serde_ini::from_str(&content).unwrap();
+        let content_removed = fs::read_to_string(&temp_file).unwrap();
+        let users_removed: UserConf = serde_ini::from_str(&content_removed).unwrap();
         assert!(
-            !users
+            !users_removed
                 .get("admins")
                 .is_some_and(|a| a.contains_key("test_user"))
         );
@@ -488,10 +500,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_list_users() {
         let temp_file = get_temp_file("pgmoneta_mcp_test_users_list.conf");
         let temp_file_str = temp_file.to_str().unwrap();
+
+        // Ensure master key exists for testing
+        let sutil = SecurityUtil::new();
+        if sutil.load_master_key().is_err() {
+            MasterKey::set_master_key(Some("test_master_pass"), false, 64, OutputFormat::Text)
+                .unwrap();
+        }
 
         // Clean up before test
         if temp_file.exists() {

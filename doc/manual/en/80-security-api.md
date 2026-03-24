@@ -64,10 +64,10 @@ The master key is used to encrypt/decrypt admin passwords stored in the user con
 
 **Signature**:
 ```rust
-pub fn load_master_key(&self) -> anyhow::Result<Zeroizing<Vec<u8>>>
+pub fn load_master_key(&self) -> anyhow::Result<MasterKey>
 ```
 
-**Description**: Loads the master key from the filesystem and returns it wrapped in a `Zeroizing` container that automatically zeros the memory when dropped.
+**Description**: Loads the master key and salt from the filesystem and returns a `MasterKey` (tuple of `Zeroizing<Vec<u8>>`) that automatically zeros the memory when dropped.
 
 **Location**: `~/.pgmoneta-mcp/master.key`
 
@@ -94,10 +94,10 @@ let master_key = security_util.load_master_key()?;
 
 **Signature**:
 ```rust
-pub fn write_master_key(&self, key: &str) -> anyhow::Result<()>
+pub fn write_master_key(&self, key: &str, salt: &[u8]) -> anyhow::Result<()>
 ```
 
-**Description**: Writes a new master key to the filesystem with secure permissions.
+**Description**: Writes a new master key and salt to the filesystem with secure permissions (two-line format).
 
 **Security features**:
 - Creates parent directory if it doesn't exist
@@ -123,7 +123,7 @@ The security module uses **AES-256-GCM** (Galois/Counter Mode) for authenticated
 
 #### Encryption Process
 
-1. **Key derivation**: Master key is derived using scrypt with a random salt
+1. **Key derivation**: Master key is derived using **PBKDF2-HMAC-SHA256** (600,000 + 1 iterations)
 2. **Nonce generation**: Random 12-byte nonce is generated
 3. **Encryption**: Plaintext is encrypted using AES-256-GCM
 4. **Packaging**: Nonce + Salt + Ciphertext are concatenated and Base64 encoded
@@ -226,13 +226,12 @@ pub fn decrypt_text(
 
 Decrypts raw ciphertext with provided nonce and salt. Used internally by `decrypt_from_base64_string()`.
 
-### Key Derivation
-
-The security module uses **scrypt** for key derivation, which is designed to be computationally expensive to resist brute-force attacks.
+The security module uses **PBKDF2-HMAC-SHA256** for key derivation, matching the server-side implementation.
 
 **Parameters**:
-- Algorithm: scrypt
-- Parameters: `Params::recommended()` (currently N=32768, r=8, p=1)
+- Algorithm: PBKDF2-HMAC-SHA256
+- Iterations (Master): 600,000
+- Iterations (File): 1
 - Output: 32 bytes (256 bits)
 
 **Process**:
