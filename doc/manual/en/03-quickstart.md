@@ -200,8 +200,6 @@ pgmoneta-mcp-admin -f pgmoneta-mcp-users.conf -U admin user edit
 pgmoneta-mcp-admin -f pgmoneta-mcp-users.conf -U admin user del
 ```
 
-## Connecting MCP Clients
-
 ### VS Code with GitHub Copilot
 
 **Prerequisites**:
@@ -269,6 +267,45 @@ max_tool_rounds = 10
 
 See the **Local LLM** and **Ollama** chapters in the [manual](https://github.com/pgmoneta/pgmoneta/tree/main/doc/manual/en) for the full setup,
 including model selection, validation, and configuration details.
+
+## Connecting MCP Clients
+
+### pgmoneta-mcp-client (CLI)
+
+The built-in CLI client reads server connection details from a dedicated configuration file.
+
+Create `pgmoneta-mcp-client.conf`:
+
+``` ini
+[client]
+url = http://localhost:8000/mcp
+timeout = 30
+```
+
+Run with the config file:
+
+``` sh
+pgmoneta-mcp-client client -c pgmoneta-mcp-client.conf tool list
+```
+
+Example tool call:
+
+``` sh
+pgmoneta-mcp-client client -c pgmoneta-mcp-client.conf tool call <tool_name_with_args> '{"key": "value"}'
+```
+
+```bash
+./pgmoneta-mcp-client client --conf <path_to_client_conf> tool call <tool_name_without_args>
+```
+
+Interactive mode can be started explicitly or by running with no command:
+
+``` sh
+pgmoneta-mcp-client interactive
+pgmoneta-mcp-client
+```
+
+For full CLI reference, see the **MCP Client** chapter.
 
 ## Verifying the Setup
 

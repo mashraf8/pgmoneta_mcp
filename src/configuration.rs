@@ -125,6 +125,23 @@ pub struct LlmConfiguration {
     pub max_tool_rounds: usize,
 }
 
+/// Configuration properties for the client.
+///
+/// This corresponds to the `[client]` section in the client configuration file.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClientConfiguration {
+    /// The URL of the MCP server.
+    pub url: String,
+    /// Connection timeout in seconds. Default: 30.
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+}
+
+#[derive(Deserialize)]
+struct ClientConfRoot {
+    pub client: ClientConfiguration,
+}
+
 /// Loads the main configuration and user configuration from the specified file paths.
 ///
 /// The files are parsed as INI format and deserialized into the [`Configuration`] struct.
@@ -174,6 +191,29 @@ pub fn load_user_configuration(user_path: &str) -> anyhow::Result<UserConf> {
             e
         )
     })
+}
+
+/// Loads only the client configuration from the specified file path.
+///
+/// # Arguments
+///
+/// * `client_path` - The file path to the client configuration file.
+///
+/// # Returns
+///
+/// Returns a parsed [`ClientConfiguration`] object, or an error if the file cannot be read or parsed.
+pub fn load_client_configuration(client_path: &str) -> anyhow::Result<ClientConfiguration> {
+    let conf = Config::builder()
+        .add_source(config::File::with_name(client_path).format(FileFormat::Ini))
+        .build()?;
+    let root = conf.try_deserialize::<ClientConfRoot>().map_err(|e| {
+        anyhow!(
+            "Error parsing client configuration at path {}: {:?}",
+            client_path,
+            e
+        )
+    })?;
+    Ok(root.client)
 }
 
 fn default_port() -> i32 {
@@ -249,4 +289,8 @@ fn default_compression() -> String {
 
 fn default_encryption() -> String {
     "aes_256_gcm".to_string()
+}
+
+fn default_timeout() -> u64 {
+    30
 }
