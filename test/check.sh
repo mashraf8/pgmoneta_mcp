@@ -290,8 +290,10 @@ ci_install_libev_from_source() {
     mkdir -p "$workdir"
 
     # Prefer official release tarball; keep a mirror fallback.
-    if ! curl -fsSL -o "$tarball" "https://dist.schmorp.de/libev/libev-4.33.tar.gz"; then
-        curl -fsSL -o "$tarball" "https://github.com/enki/libev/archive/refs/tags/v4.33.tar.gz"
+    if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o "$tarball" "https://dist.schmorp.de/libev/libev-4.33.tar.gz"; then
+        if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o "$tarball" "https://github.com/enki/libev/archive/refs/tags/v4.33.tar.gz"; then
+            curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o "$tarball" "https://distfiles.macports.org/libev/libev-4.33.tar.gz"
+        fi
     fi
 
     tar -xzf "$tarball" -C "$workdir"
@@ -328,7 +330,9 @@ ci_install_libyaml_from_source() {
     rm -rf "$workdir"
     mkdir -p "$workdir"
 
-    curl -fsSL -o "$tarball" "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz"
+    if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o "$tarball" "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz"; then
+        curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o "$tarball" "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz"
+    fi
 
     tar -xzf "$tarball" -C "$workdir"
     extracted_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
@@ -371,8 +375,17 @@ ci_install_utilities() {
         return 1
     }
 
-    rpm -Uvh "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"
-    rpm -Uvh "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+    if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"; then
+        if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://download.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"; then
+            curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://mirror.netone.nl/other/epel/epel-release-latest-10.noarch.rpm"
+        fi
+    fi
+    rpm -Uvh /tmp/epel-release.rpm
+    if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/pgdg.rpm "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"; then
+        curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/pgdg.rpm "https://ftp.postgresql.org/pub/repos/yum/reporpms/EL-10-${arch}/pgdg-redhat-repo-latest.noarch.rpm"
+    fi
+    rpm -Uvh /tmp/pgdg.rpm
+    rm -f /tmp/epel-release.rpm /tmp/pgdg.rpm
 
     # EPEL notes that many packages (including devel headers) may require CRB.
     if command -v crb >/dev/null 2>&1; then

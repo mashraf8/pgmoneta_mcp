@@ -39,8 +39,17 @@ COPY usr/bin/entry /usr/bin/entry
 RUN chmod 755 /usr/bin/run-pgmoneta /usr/bin/run-postgresql /usr/bin/entry
 
 # install needed packages and build dependencies
-RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm \
- && rpm -Uvh https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm \
+RUN if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"; then \
+        if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://download.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm"; then \
+            curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/epel-release.rpm "https://mirror.netone.nl/other/epel/epel-release-latest-10.noarch.rpm"; \
+        fi; \
+    fi \
+ && rpm -Uvh /tmp/epel-release.rpm \
+ && if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/pgdg.rpm "https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"; then \
+        curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/pgdg.rpm "https://ftp.postgresql.org/pub/repos/yum/reporpms/EL-10-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"; \
+    fi \
+ && rpm -Uvh /tmp/pgdg.rpm \
+ && rm -f /tmp/epel-release.rpm /tmp/pgdg.rpm \
  && dnf install -y 'dnf-command(config-manager)' \
  && dnf config-manager --set-enabled crb \
  && dnf -y update \
@@ -53,9 +62,14 @@ RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch
 
 # Build libev from source (matching check.sh)
 RUN mkdir -p /tmp/libev-src \
- && curl -fsSL -o /tmp/libev-src/libev.tar.gz "https://dist.schmorp.de/libev/libev-4.33.tar.gz" \
+ && if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/libev-src/libev.tar.gz "https://dist.schmorp.de/libev/libev-4.33.tar.gz"; then \
+        if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/libev-src/libev.tar.gz "https://github.com/enki/libev/archive/refs/tags/v4.33.tar.gz"; then \
+            curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/libev-src/libev.tar.gz "https://distfiles.macports.org/libev/libev-4.33.tar.gz"; \
+        fi; \
+    fi \
  && tar -xzf /tmp/libev-src/libev.tar.gz -C /tmp/libev-src \
- && cd /tmp/libev-src/libev-4.33 \
+ && LIBEV_SRC_DIR="$(find /tmp/libev-src -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
+ && cd "$LIBEV_SRC_DIR" \
  && ./configure --prefix=/usr \
  && make -j$(nproc) \
  && make install \
@@ -64,10 +78,13 @@ RUN mkdir -p /tmp/libev-src \
 # Build libyaml from source (matching check.sh)
 RUN dnf install -y autoconf automake libtool \
  && mkdir -p /tmp/libyaml-src \
- && curl -fsSL -o /tmp/libyaml-src/libyaml.tar.gz "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz" \
+ && if ! curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/libyaml-src/libyaml.tar.gz "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz"; then \
+        curl --retry 3 --retry-all-errors --connect-timeout 2 -fsSL -o /tmp/libyaml-src/libyaml.tar.gz "https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz"; \
+    fi \
  && tar -xzf /tmp/libyaml-src/libyaml.tar.gz -C /tmp/libyaml-src \
- && cd /tmp/libyaml-src/libyaml-0.2.5 \
- && ./bootstrap \
+ && LIBYAML_SRC_DIR="$(find /tmp/libyaml-src -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
+ && cd "$LIBYAML_SRC_DIR" \
+ && if [ -f ./bootstrap ]; then ./bootstrap; fi \
  && ./configure --prefix=/usr \
  && make -j$(nproc) \
  && make install \
