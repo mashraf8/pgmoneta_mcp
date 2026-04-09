@@ -123,6 +123,10 @@ pub struct LlmConfiguration {
     /// Maximum number of tool-calling rounds per user prompt. Default: `10`.
     #[serde(default = "default_llm_max_tool_rounds")]
     pub max_tool_rounds: usize,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
 }
 
 /// Configuration properties for the inspector.
@@ -165,6 +169,22 @@ pub fn load_configuration(config_path: &str, user_path: &str) -> anyhow::Result<
             "Error parsing configuration at path {}, user {}: {:?}",
             config_path,
             user_path,
+            e
+        )
+    })?;
+    normalize_configuration(conf)
+}
+
+/// Loads only the base configuration (no user/admin file needed).
+/// Used by chat binary which doesn't need admin credentials.
+pub fn load_base_configuration(config_path: &str) -> anyhow::Result<Configuration> {
+    let conf = Config::builder()
+        .add_source(config::File::with_name(config_path).format(FileFormat::Ini))
+        .build()?;
+    let conf = conf.try_deserialize::<Configuration>().map_err(|e| {
+        anyhow!(
+            "Error parsing configuration at path {}: {:?}",
+            config_path,
             e
         )
     })?;

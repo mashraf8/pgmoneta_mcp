@@ -36,7 +36,16 @@ export HF_HOME=/mnt/ai/huggingface
 
 ### Start the server
 
-Start the vLLM server by pointing the `openai.api_server` entrypoint to your desired model. vLLM will automatically download the model weights to the Hugging Face cache if they are not already present.
+Start the vLLM server with tool-calling support enabled. The `--enable-auto-tool-choice` and `--tool-call-parser` flags are **required** for pgmoneta_mcp to invoke MCP tools.
+
+```sh
+vllm serve ibm-granite/granite-3.0-8b-instruct \
+  --port 8000 \
+  --enable-auto-tool-choice \
+  --tool-call-parser granite
+```
+
+Or using the Python module entrypoint:
 
 **Small setup** (Laptop friendly, ~8GB RAM req):
 ```sh
@@ -49,7 +58,9 @@ HF_HOME=/mnt/ai/huggingface python -m vllm.entrypoints.openai.api_server \
 ```sh
 HF_HOME=/mnt/ai/huggingface python -m vllm.entrypoints.openai.api_server \
   --model ibm-granite/granite-3.0-8b-instruct \
-  --port 8000
+  --port 8000 \
+  --enable-auto-tool-choice \
+  --tool-call-parser granite
 ```
 
 **Full setup** (Workstation only):
@@ -57,8 +68,18 @@ HF_HOME=/mnt/ai/huggingface python -m vllm.entrypoints.openai.api_server \
 HF_HOME=/mnt/ai/huggingface python -m vllm.entrypoints.openai.api_server \
   --model meta-llama/Meta-Llama-3.1-70B-Instruct \
   --port 8000 \
-  --tensor-parallel-size 4
+  --tensor-parallel-size 4 \
+  --enable-auto-tool-choice \
+  --tool-call-parser llama3_json
 ```
+
+The `--tool-call-parser` value depends on the model ([vLLM docs](https://docs.vllm.ai/en/latest/features/tool_calling.html)):
+
+| Model | Parser |
+| :---- | :----- |
+| ibm-granite/granite-3.0-8b-instruct | `granite` |
+| Qwen/Qwen2.5-\*-Instruct | `hermes` |
+| meta-llama/Llama-3.1-\*-Instruct | `llama3_json` |
 
 The default endpoint will be `http://localhost:8000`.
 

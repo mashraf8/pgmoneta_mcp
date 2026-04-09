@@ -18,7 +18,15 @@ path = "src/bin/admin/admin.rs"
 name = "pgmoneta-mcp-inspector"
 path = "src/bin/inspector/main.rs"
 
+[[bin]]
+name = "pgmoneta-mcp-client"
+path = "src/bin/client/main.rs"
+
 [dependencies]
+dialoguer = "0.11"
+indicatif = "0.17"
+console = "0.15"
+termimad = "0.30"
 tokio = {version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 rmcp = { version = "1.3", features = [
@@ -67,6 +75,7 @@ syslog-tracing = "0.3.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 inquire = "0.9.4"
 treelog = { version = "0.0.6", features = ["arbitrary-json"] }
+rig = { git = "https://github.com/0xPlaygrounds/rig.git", package = "rig-core", features = ["rmcp"] }
 [target.'cfg(windows)'.dependencies]
 winlog2 = "0.3.2"
 log = "0.4"

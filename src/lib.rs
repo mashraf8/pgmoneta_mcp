@@ -28,6 +28,7 @@
 //! * **`utils`**: Provides shared helper functions.
 
 pub mod agent;
+pub mod chat_client;
 pub mod compression;
 pub mod configuration;
 pub mod constant;
